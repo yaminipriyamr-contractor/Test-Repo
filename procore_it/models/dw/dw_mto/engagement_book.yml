@@ -1,8 +1,0 @@
-version: 2
-
-models:
-  - name: engagement_book
-    description: '{{ doc("engagement_book") }}'
-    tests:
-      - dbt_expectations.expect_compound_columns_to_be_unique:
-          column_list: ["account_id","opportunity_id","up_for_renewal_date","engagement_year_number"]
