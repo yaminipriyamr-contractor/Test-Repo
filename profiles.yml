@@ -1,0 +1,7 @@
+test_repo:
+  target: dev
+  outputs:
+    dev:
+      type: testdb
+      path: dev.testdb
+      threads: 4
