@@ -1,0 +1,983 @@
+# Name your project! Project names should contain only lowercase characters
+# and underscores. A good package name should reflect your organization's
+# name or the intended use of these models.
+name: snowflake_it
+version: '1.0.0'
+config-version: 2
+
+flags:
+  source_freshness_run_project_hooks: True
+
+# This setting configures which "profile" dbt uses for this project.
+profile: 'snowflake-it'
+
+# These configurations specify where dbt should look for different types of files.
+# The `model-paths` config, for example, states that models in this project can be
+# found in the "models/" directory. You probably won't need to change these!
+model-paths: [ "models", "sources" ]
+analysis-paths: [ "analysis" ]
+test-paths: [ "tests" ]
+seed-paths: [ "data" ]
+macro-paths: [ "macros" ]
+snapshot-paths: [ "snapshots" ]
+
+target-path: "target" # directory which will store compiled SQL files
+clean-targets:
+# directories to be removed by `dbt clean`
+- "target"
+- "dbt_packages"
+
+on-run-end: "{% if target.database.lower() == 'procore_it' %}{{ dbt_artifacts.upload_results(results) }}{% endif %}" # using target database due to n number of "prod" targets
+
+# Variables
+vars:
+  ### package agnostic variables
+  'dbt_date:time_zone': 'America/Los_Angeles'
+  # have elementary upload artifacts on every on-run-end hook, specific to current-state tables (dbt_run_results, dbt_invocations, elementary_test_results, etc. still uploaded by default)
+  disable_dbt_artifacts_autoupload: false
+  # set to 0 so the elementary pkg doesn't store test failure outputs in test_result_rows table
+  test_sample_row_count: 0
+  ### package specific variables
+  data_diff:
+    prod_database: 'procore_it'
+  dbt_expectations:
+    'dbt_date:time_zone': 'America/Los_Angeles'
+  snowflake_it:
+    execution_date: '2017-06-01'
+    is_airflow_incremental_run: false
+    large_warehouse: "{% if target.name.lower() == 'prod' %} ddl_deployment_dbm_large_wh {% elif target.name.lower() == 'prod_ci' or target.name.lower() == 'pullrequest' %} ddl_deployment_dbm_large_wh_pr {% else %} ddl_deployment_dbm_large_wh_dev {% endif %}"
+    xlarge_warehouse: "{% if target.name.lower() == 'prod' %} ddl_deployment_dbm_xlarge_wh {% elif target.name.lower() == 'prod_ci' or target.name.lower() == 'pullrequest' %} ddl_deployment_dbm_xlarge_wh_pr {% else %} ddl_deployment_dbm_xlarge_wh_dev {% endif %}"
+    2xlarge_warehouse: "{% if target.name.lower() == 'prod' %} ddl_deployment_dbm_2xlarge_wh {% elif target.name.lower() == 'prod_ci' or target.name.lower() == 'pullrequest' %} ddl_deployment_dbm_2xlarge_wh_pr {% else %} ddl_deployment_dbm_2xlarge_wh_dev {% endif %}"
+    qas_warehouse: "{% if target.name.lower() == 'prod' %} ddl_deployment_dbm_medium_qas_wh {% elif target.name.lower() == 'prod_ci' or target.name.lower() == 'pullrequest' %} ddl_deployment_dbm_medium_qas_wh_pr {% else %} ddl_deployment_dbm_medium_qas_wh_dev {% endif %}"
+    recursive_warehouse: "{% if target.name.lower() == 'prod' %} ddl_deployment_pdp_xlarge_rec_wh {% elif target.name.lower() == 'prod_ci' or target.name.lower() == 'pullrequest' %} ddl_deployment_pdp_xlarge_rec_wh_pr {% else %} ddl_deployment_pdp_xlarge_rec_wh_dev {% endif %}"
+    pdp_mdm_database: 'pdp_mdm'
+    pdp_corporate_reporting: 'pdp_corporate_reporting'
+    pdp_data_science_db: 'pdp_data_science'
+    talent_sensitive_db: 'talent_sensitive'
+
+# Configuring models
+# Full documentation: https://docs.getdbt.com/docs/configuring-models
+
+# In this example config, we tell dbt to build all models in the example/ directory
+# as tables. These settings can be overridden in the individual model files
+# using the `{{ config(...) }}` macro.
+models:
+  +on_schema_change: "sync_all_columns"
+  +transient: false
+  +copy_grants: true
+  +pre-hook:
+  - "ALTER SESSION SET TIMEZONE = 'UTC'"
+  - "insert into _monitoring.dbt_audit (event_name, event_timestamp, event_schema, event_model) values ( 'starting model deployment', current_timestamp(), '{{this.schema}}', '{{this.name}}')"
+  +post-hook:
+  - "ALTER SESSION SET TIMEZONE = 'UTC'"
+  - "insert into _monitoring.dbt_audit (event_name, event_timestamp, event_schema, event_model) values ( 'completed model deployment', current_timestamp(), '{{this.schema}}', '{{this.name}}')"
+  dbt_artifacts:
+    +schema: pkg_dbt_artifacts
+  elementary:
+    +enabled: "{{ target.database.lower() == 'procore_it' }}" # using target database due to n number of "prod" targets
+    +schema: "pkg_elementary"
+  re_data:
+    +schema: pkg_re
+    internal:
+      +schema: pkg_re_internal
+  snowflake_it:
+    data_modification:
+      salesforce:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+    prep:
+      +docs:
+        node_color: "#cd7f32"
+      pdp_mdm_prep:
+        +schema: pdp_mdm_prep
+        +materialized: table
+        +query_tag: '{"tech_owner": "shared", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      pdp_ds:
+        pdp_ds_prep:
+          +query_tag: '{"tech_owner": "Customer Health", "business_owner": "Adoption Intelligence", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      pdp_revenue:
+        pdp_mart_export_revenue_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      pdp_acv:
+        pdp_acv_prep:
+          +query_tag: '{"tech_owner": "Customer Health", "business_owner": "Adoption Intelligence", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      pdp_cr:
+        pdp_cr__arr_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        pdp_cr__looker_transition_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      pdp_census_prep:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+
+      raw:
+        adobe_analytics_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Marketing", "domain_vertical": "Business", "product_name": "Digital Marketing", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        amplitude_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Marketing", "domain_vertical": "Tech", "product_name": "Audience Intelligence, GTM", "consumer_system": "Braze", "pii": "false", "q_src": "dbt"}'
+        analytic_events:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Marketing", "domain_vertical": "Business", "product_name": "Sales Intelligence", "consumer_system": "Tableau, Salesforce", "pii": "false", "q_src": "dbt"}'
+        analytic_events_prep:
+          +schema: analytic_events_prep
+          +materialized: view
+          +query_tag: '{"tech_owner": "Customer Health", "business_owner": "Customer Success", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        apple_app_store_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Marketing", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        battlecard_certification_data_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "DTS", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        bci_prep:
+          +schema: bci_prep
+          +materialized: view
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "DTS", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        blameless_prep:
+          +schema: blameless_prep
+          +materialized: table
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "DTS", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        bimsa_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "DTS", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        business_registry_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Marketing", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        calabrio_prep:
+          +schema: calabrio_prep
+          +materialized: table
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Sales", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        ccd_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "PnT Analytics", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        certinia_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "DTS", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        clari_api_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        clari_archive_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        clari_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        concur_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        collaborators_prep:
+          +schema: collaborators_prep
+          +materialized: table
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Revenue", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        dbt_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        dbx_dataload_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        demandbase_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "DTS", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        dev_metrics_db_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "DTS", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        dev_portal_db_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "DTS", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        dnb_prep:
+          +query_tag: '{"tech_owner": "Sales Intelligence", "business_owner": "Sales", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        documentdb_polaris_prep:
+          +query_tag: '{"tech_owner": "Customer Health", "business_owner": "Adoption Intelligence", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        dts_emp_productivity_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "DTS", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        dw_shared_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        eng_prep:
+          +schema: eng_prep
+          +materialized: view
+        events_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "DTS", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        esticom_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "DTS", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        finance_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "Business", "product_name": "Corp Data Reporting", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+        fivetran_log_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "DTS", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        getgeo_prep:
+          +query_tag: '{"tech_owner": "shared", "business_owner": "Marketing", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        github_prep:
+          +query_tag: '{"tech_owner": "shared", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        gitlab_prep:
+          +query_tag: '{"tech_owner": "shared", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        glenigan_api_prep:
+          +query_tag: '{"tech_owner": "Sales Intelligence", "business_owner": "Sales", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        gong_data_cloud_prep:
+          +query_tag: '{"tech_owner": "Sales Intelligence", "business_owner": "Sales", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        google_ads_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Marketing", "domain_vertical": "Business", "product_name": "Voice of Customer, Digital Marketing", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+        google_analytics_4_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Marketing", "domain_vertical": "Business", "product_name": "Voice of Customer, Digital Marketing", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+        google_analytics_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Marketing", "domain_vertical": "Business", "product_name": "Voice of Customer, Digital Marketing", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+        google_search_console_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Marketing", "domain_vertical": "Business", "product_name": "Voice of Customer, Digital Marketing", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+        gtm_scout_prep:
+          +schema: gtm_scout_prep
+          +query_tag: '{"tech_owner": "Sales Intelligence", "business_owner": "Sales", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        greenhouse_biconnector_external_prep:
+          +schema: greenhouse_biconnector_external_prep
+          +materialized: table
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "HR", "domain_vertical": "Business", "product_name": "", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+        hg_insights_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        ignitium_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Marketing", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        industry_leading_indicators_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        inference_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        information_schema_prep:
+          +query_tag: '{"tech_owner": "Shared", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "DTS", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        ironclad_demo_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Legal", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        ironclad_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Legal", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        jira_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        looker_data_prep:
+          +schema: looker_data_prep
+          +materialized: table
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "Business", "product_name": "Corp Data Reporting", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+        linkedin_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Marketing", "domain_vertical": "Business", "product_name": "Digital Marketing", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+        looker_data_legacy_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "Business", "product_name": "Corp Data Reporting", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+        mart_product_usage_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        marketo_prep:
+          +schema: marketo_prep
+          +materialized: view
+          +query_tag: '{"tech_owner": "Sales Intelligence", "business_owner": "Sales", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        ml_prod_rnd_prep:
+          +schema: ml_prod_rnd_prep
+          +materialized: table
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        moneyball_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "PnT Analytics", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        navan_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        netsuite_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        ods_history_procore_us01_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "PnT Analytics", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        ods_history_procore_us02_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "PnT Analytics", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        opsgenie_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        outreach_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        pdp_data_governance_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        pigment_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        planning_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        power_bi_prep:
+          +query_tag: '{"tech_owner": "Customer Health", "business_owner": "Adoption Intelligence", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        prisma_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "DTS", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        procore_health_score_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        procore_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        product_usage_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "PnT Analytics", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        pendo_prep:
+          +schema: pendo_prep
+          +materialized: table
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Revenue", "domain_vertical": "Business", "product_name": "", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+        pkg_elementary_prep:
+          +schema: pkg_elementary_prep
+          +materialized: table
+          +query_tag: '{"tech_owner": "shared", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        postgres_sfdc_ai_api_sfdc_prep:
+          +schema: postgres_sfdc_ai_api_sfdc_prep
+          +materialized: table
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        procore_db_prep:
+          +schema: procore_db_prep
+          +materialized: table
+          +query_tag: '{"tech_owner": "shared", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        qualtrics_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "DTS", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        revpro_prep:
+          +schema: revpro_prep
+          +materialized: view
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        r_and_d_snapshot_prep:
+          +query_tag: '{"tech_owner": "shared", "business_owner": "PnT Analytics", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        rally_api_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        reed_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        revpro_zuora_api_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        salesforce_prep:
+          +schema: salesforce_prep
+          +materialized: table
+          +query_tag: '{"tech_owner": "shared", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        salesforce_event_monitoring_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "DTS", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        salesforce_external_prep:
+          +query_tag: '{"tech_owner": "shared", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        security_journey_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "DTS", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        salesforce_snapshots_prep:
+          +schema: salesforce_snapshots_prep
+          +materialized: table
+          +query_tag: '{"tech_owner": "shared", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        sherpa_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "PnT Analytics", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        simplelegal_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Legal", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        skilljar_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "HR", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        smartrecruiter_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "HR", "domain_vertical": "Business", "product_name": "", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+        snowflake_prep:
+          +query_tag: '{"tech_owner": "shared", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        spin_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        stripe_prep:
+          +schema: stripe_prep
+          +materialized: view
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        tableau_public_prep:
+          +query_tag: '{"tech_owner": "OPS", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        talent_sensitive_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "HR", "domain_vertical": "Business", "product_name": "", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+        tlt_imports_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Exec", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        truvoice_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        unified_datasets_prep:
+          +schema: unified_datasets_prep
+          +materialized: table
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        unwrap_prep:
+          +schema: unwrap_prep
+          +materialized: table
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        usage_counts_prep:
+          +schema: usage_counts_prep
+          +materialized: table
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        usage_scores_prep:
+          +schema: usage_scores_prep
+          +materialized: table
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        us_zip_code_crosswalk_hudusps_prep:
+          +query_tag: '{"tech_owner": "shared", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        us_zip_code_metadata_prep:
+          +query_tag: '{"tech_owner": "shared", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        usergems_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        uservoice_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        voc_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        workday_external_prep:
+          +schema: workday_external_prep
+          +materialized: table
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "HR", "domain_vertical": "Business", "product_name": "", "consumer_system": "Tableau", "pii": "true", "q_src": "dbt"}'
+        workday_prep:
+          +schema: workday_prep
+          +materialized: table
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "HR", "domain_vertical": "Business", "product_name": "", "consumer_system": "Tableau", "pii": "true", "q_src": "dbt"}'
+        xactly_prep:
+          +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "Business", "product_name": "", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+        zoominfo_prep:
+          +schema: zoominfo_prep
+          +materialized: table
+          +query_tag: '{"tech_owner": "shared", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        zuora_imports_prep:
+          +schema: zuora_imports_prep
+          +materialized: table
+          +query_tag: '{"tech_owner": "shared", "business_owner": "CRI/Finance", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        zuora_prep:
+          +schema: zuora_prep
+          +materialized: table
+          +query_tag: '{"tech_owner": "shared", "business_owner": "CRI/Finance", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        zuora_snapshots_prep:
+          +schema: zuora_snapshots_prep
+          +materialized: table
+          +query_tag: '{"tech_owner": "shared", "business_owner": "CRI/Finance", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+        zoominfo_api_prep:
+          +query_tag: '{"tech_owner": "shared", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+    dw:
+      dw_360:
+        +schema: dw_360
+        +materialized: table
+        +query_tag: '{"tech_owner": "Sales Intelligence", "business_owner": "Sales", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_acv:
+        +schema: dw_acv
+        +materialized: table
+        +query_tag: '{"tech_owner": "Sales Intelligence", "business_owner": "Adoption Intelligence", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_account_funnel:
+        +schema: dw_account_funnel
+        +materialized: table
+        +query_tag: '{"tech_owner": "Sales Intelligence", "business_owner": "Revenue", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_accounting:
+        +schema: dw_accounting
+        +materialized: table
+        +tags: dw_cr
+      dw_ds:
+        +schema: dw_ds
+        +materialized: table
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_eng:
+        +schema: dw_eng
+        +materialized: table
+        +query_tag: '{"tech_owner": "shared", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_executive:
+        +schema: dw_executive
+        +materialized: table
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Exec", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_finance:
+        +schema: dw_finance
+        +materialized: table
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "Business", "product_name": "Corp Data Reporting", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      dw_htr:
+        +schema: dw_htr
+        +materialized: table
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "HR", "domain_vertical": "Business", "product_name": "", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      dw_htr_sensitive:
+        +schema: dw_htr_sensitive
+        +materialized: table
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "HR", "domain_vertical": "Business", "product_name": "", "consumer_system": "Tableau", "pii": "true", "q_src": "dbt"}'
+      dw_itr:
+        +schema: dw_itr
+        +materialized: table
+        +query_tag: '{"tech_owner": "Sales Intelligence", "business_owner": "Revenue", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_mdm:
+        +schema: dw_mdm
+        +materialized: table
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "PnT Analytics", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_mto:
+        +schema: dw_mto
+        +materialized: table
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Revenue", "domain_vertical": "Business", "product_name": "", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      dw_pnt_eng:
+        +schema: dw_pnt_eng
+        +query_tag: '{"tech_owner": "PnT Engineering", "business_owner": "PnT Analytics", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_production_exports:
+        +schema: dw_production_exports
+        +materialized: table
+        +tags: dw_cr
+      dw_qtc:
+        +schema: dw_qtc
+        +materialized: table
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_r_and_d:
+        +schema: dw_r_and_d
+        +materialized: table
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "PnT Analytics", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_shared:
+        +schema: dw_shared
+        +materialized: table
+        +query_tag: '{"tech_owner": "shared", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_tech_services:
+        +schema: dw_tech_services
+        +materialized: table
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Tech Services", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_battlecard_certification_data:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "DTS", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_collaborators:
+        +query_tag: '{"tech_owner": "Sales Intelligence", "business_owner": "Revenue", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_commissions:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "Business", "product_name": "Corp Data Reporting", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      dw_compensation:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "Business", "product_name": "Corp Data Reporting", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      dw_whitespace:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "Business", "product_name": "Corp Data Reporting", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      dw_revenue:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "Business", "product_name": "Corp Data Reporting", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      dw_salesforce_reporting:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "Business", "product_name": "Corp Data Reporting", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      dw_looker_transition:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "Business", "product_name": "Corp Data Reporting", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      dw_corporate_strategy:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "Business", "product_name": "Corp Data Reporting", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      dw_cs:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Customer Success", "domain_vertical": "Business", "product_name": "", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      dw_dts_emp_productivity:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "DTS", "domain_vertical": "Business", "product_name": "DTS", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      dw_dts_prisma:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "DTS", "domain_vertical": "Business", "product_name": "DTS", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      dw_esticom:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "PnT Analytics", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_events:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "PnT Analytics", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_github:
+        +query_tag: '{"tech_owner": "PnT Engineering", "business_owner": "PnT Analytics", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_gitlab:
+        +query_tag: '{"tech_owner": "PnT Engineering", "business_owner": "PnT Analytics", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_golden_kpis:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Exec", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_gtm_scout:
+        +schema: dw_gtm_scout
+        +query_tag: '{"tech_owner": "Sales Intelligence", "business_owner": "Sales", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_hierarchy:
+        +query_tag: '{"tech_owner": "Sales Intelligence", "business_owner": "Revenue", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_legal:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Legal", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_life_cycle:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "PnT Analytics", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_marketing:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Marketing", "domain_vertical": "Business", "product_name": "Voice of Customer", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      dw_marketing_campaigns:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Marketing", "domain_vertical": "Business", "product_name": "Voice of Customer", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      dw_moneyball:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "PnT Analytics", "domain_vertical": "Business", "product_name": "P&T Opertaions", "consumer_system": "Airtable", "pii": "false", "q_src": "dbt"}'
+      dw_pdp_arr:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_adopt_intel:
+        +query_tag: '{"tech_owner": "Customer Health", "business_owner": "Adoption Intelligence", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_polaris:
+        +query_tag: '{"tech_owner": "Customer Health", "business_owner": "Adoption Intelligence", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_rally_api:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Marketing", "domain_vertical": "Business", "product_name": "P&T Opertaions", "consumer_system": "Airtable", "pii": "false", "q_src": "dbt"}'
+      dw_revpro_import:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_ris:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "PnT Analytics", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_skilljar:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "DTS", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_spin:
+        +query_tag: '{"tech_owner": "Sales Intelligence", "business_owner": "Sales", "domain_vertical": "Tech", "product_name": "Sales Intelligence", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_truvoice:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "DTS", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dw_ubp:
+        +schema: dw_ubp
+        +materialized: table
+        +query_tag: '{"tech_owner": "ACV Intelligence", "business_owner": "Subscription Management Services", "domain_vertical": "Business", "product_name": "User-Based Pricing", "consumer_system": "Streamlit", "pii": "false", "q_src": "dbt"}'
+      dw_unwrap_share:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Marketing", "domain_vertical": "Business", "product_name": "Voice of Customer", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      dw_zoom_share:
+        +query_tag: '{"tech_owner": "shared", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+    mart:
+      +docs:
+        node_color: "#c04000"
+      mart_account_funnel:
+        +schema: mart_account_funnel
+        +materialized: view
+        +query_tag: '{"tech_owner": "Sales Intelligence", "business_owner": "Sales", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_executive:
+        +schema: mart_executive
+        +materialized: view
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Exec", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_export_arr:
+        +schema: mart_export_arr
+        +materialized: view
+        +tags: dw_cr
+      mart_export_procore_it_census:
+        +schema: mart_export_procore_it_census
+        +tags:
+        - "x-db-deps"
+        +query_tag: '{"tech_owner": "Customer Health", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_export_procore_portal:
+        +schema: mart_export_procore_portal
+        +tags:
+        - "x-db-deps"
+        +query_tag: '{"tech_owner": "Customer Health", "business_owner": "Adoption Intelligence", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_finance:
+        +schema: mart_finance
+        +materialized: view
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_htr_sensitive:
+        +schema: mart_htr_sensitive
+        +materialized: view
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "HR", "domain_vertical": "Business", "product_name": "", "consumer_system": "API Reverse ETL", "pii": "true", "q_src": "dbt"}'
+      mart_levelset:
+        +schema: mart_levelset
+        +materialized: view
+        +tags:
+        - "x-db-deps"
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_moniker:
+        +schema: mart_moniker
+        +materialized: view
+        +query_tag: '{"tech_owner": "OPS", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_pdp_levelset:
+        +schema: mart_pdp_levelset
+        +materialized: table
+        +tags:
+        - "x-db-deps"
+        +query_tag: '{"tech_owner": "Customer Health", "business_owner": "Levelset", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_okr:
+        +schema: mart_okr
+        +materialized: view
+        +query_tag: '{"tech_owner": "Customer Health", "business_owner": "Revenue", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_product_usage:
+        +schema: mart_product_usage
+        +materialized: table
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "PnT Analytics", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_public_reporting:
+        +schema: mart_public_reporting
+        +materialized: view
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "FSO", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_r_and_d:
+        +schema: mart_r_and_d
+        +materialized: view
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "PnT Analytics", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_rev:
+        +schema: mart_rev
+        +materialized: view
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Revenue", "domain_vertical": "Business", "product_name": "", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      mart_sales_play:
+        +schema: mart_sales_play
+        +materialized: view
+        +query_tag: '{"tech_owner": "Sales Intelligence", "business_owner": "GTM Enablement", "domain_vertical": "Business", "product_name": "Sales Play Analytics", "consumer_system": "Streamlit", "pii": "false", "q_src": "dbt"}'
+      mart_shared:
+        +schema: mart_shared
+        +materialized: view
+        +query_tag: '{"tech_owner": "shared", "business_owner": "PnT Analytics", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_skilljar:
+        +schema: mart_skilljar
+        +materialized: view
+        +query_tag: '{"tech_owner": "Sales Intelligence", "business_owner": "Sales", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_ubp:
+        +schema: mart_ubp
+        +materialized: view
+        +query_tag: '{"tech_owner": "ACV Intelligence", "business_owner": "Subscription Management Services", "domain_vertical": "Business", "product_name": "User-Based Pricing", "consumer_system": "Streamlit", "pii": "false", "q_src": "dbt"}'
+      mart_unwrap_share:
+        +schema: mart_unwrap_share
+        +materialized: view
+        +secure: true
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Marketing", "domain_vertical": "Tech", "product_name": "Audience Intelligence, GTM", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_visier:
+        +schema: mart_visier
+        +materialized: view
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "HR", "domain_vertical": "Business", "product_name": "", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      mart_clay:
+        +schema: mart_clay
+        +materialized: table
+        +query_tag: '{"tech_owner": "Sales Intelligence", "business_owner": "Sales", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_acv:
+        +query_tag: '{"tech_owner": "Customer Health", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_battlecard_certification_data:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "DTS", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_collaborators:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Revenue", "domain_vertical": "Business", "product_name": "", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      mart_data_science:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "DTS", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_dts_emp_productivity:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "DTS", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_dts_prisma:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "DTS", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_eng:
+        +query_tag: '{"tech_owner": "shared", "business_owner": "Data Engineering", "domain_vertical": "Tech", "product_name": "DTS", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_executive_sensitive:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Exec", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_export_procore_it_data_science:
+        +query_tag: '{"tech_owner": "Customer Health", "business_owner": "Adoption Intelligence", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_export_procore_it_dbx:
+        +schema: mart_export_procore_it_dbx
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "PnT Analytics", "domain_vertical": "Business", "product_name": "", "consumer_system": "Databricks", "pii": "false", "q_src": "dbt"}'
+      mart_github:
+        +query_tag: '{"tech_owner": "shared", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_gtm_scout:
+        +schema: mart_gtm_scout
+        +query_tag: '{"tech_owner": "Sales Intelligence", "business_owner": "Sales", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_hierarchy:
+        +query_tag: '{"tech_owner": "Customer Health", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_legal:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Legal", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_marketing:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Marketing", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_marketing_campaigns:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Marketing", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_marketingfintech:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Marketing", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_mckinsey:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "PnT Analytics", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_moneyball:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "PnT Analytics", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_pdp_arr:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_adopt_intel:
+        +query_tag: '{"tech_owner": "Customer Health", "business_owner": "Adoption Intelligence", "domain_vertical": "Business", "product_name": "PER / Adoption/Risk", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      mart_pnt_eng:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "PnT Analytics", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_rally_api:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "PnT Analytics", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_recruiting_sensitive:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "HR", "domain_vertical": "Business", "product_name": "", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      mart_revpro_import:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Revenue", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_security_journey:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "DTS", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_spin:
+        +query_tag: '{"tech_owner": "Sales Intelligence", "business_owner": "Sales", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_tlt:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Exec", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_truvoice:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Marketing", "domain_vertical": "Tech", "product_name": "Audience Intelligence, GTM", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_workday_ingestion:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "HR", "domain_vertical": "Business", "product_name": "", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      mart_workplace_experience:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "DTS", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      mart_zoom_share:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Revenue", "domain_vertical": "Business", "product_name": "", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      mart_compensation:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "Business", "product_name": "Corp Data Reporting", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      mart_corporate_strategy:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "Business", "product_name": "Corp Data Reporting", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      mart_fpa:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "Business", "product_name": "Corp Data Reporting", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      mart_procore_pay:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "Business", "product_name": "Corp Data Reporting", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      mart_salesforce_reporting:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "Business", "product_name": "Corp Data Reporting", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      mart_export_pigment:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "Business", "product_name": "Corp Data Reporting", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      mart_export_looker_transition:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "Business", "product_name": "Corp Data Reporting", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      mart_export_revenue:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "Business", "product_name": "Corp Data Reporting", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+    source:
+      bimsa:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "DTS", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      calabrio:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Sales", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      demandbase:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      dnb:
+        +query_tag: '{"tech_owner": "Sales Intelligence", "business_owner": "Sales", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      hg_insights:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Customer Success", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      ignitium:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Marketing", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      inference:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      getgeo:
+        +query_tag: '{"tech_owner": "shared", "business_owner": "PnT Analytics", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      github:
+        +query_tag: '{"tech_owner": "shared", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      glenigan_api:
+        +query_tag: '{"tech_owner": "Sales Intelligence", "business_owner": "Sales", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      google_search_console:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Marketing", "domain_vertical": "Business", "product_name": "Voice of Customer, Digital Marketing", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      levelset:
+        +query_tag: '{"tech_owner": "Sales Intelligence", "business_owner": "Sales", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      lever_laborchart:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "HR", "domain_vertical": "Business", "product_name": "", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      osha:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      pendo:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Revenue", "domain_vertical": "Business", "product_name": "", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      pingdom:
+        +schema: pingdom
+        +materialized: table
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "PnT Analytics", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      ppp:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "PnT Analytics", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      prisma:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "DTS", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      procore_db:
+        +query_tag: '{"tech_owner": "shared", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      rally_api:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "PnT Analytics", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      reed:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      salesforce_event_monitoring:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "DTS", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      simplelegal:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Legal", "domain_vertical": "Business", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      smartling:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "PnT Analytics", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      smartrecruiter:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "HR", "domain_vertical": "Business", "product_name": "", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      staging:
+        +query_tag: '{"tech_owner": "shared", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      truvoice:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Marketing", "domain_vertical": "Tech", "product_name": "Audience Intelligence, GTM", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      usergems:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      voc:
+        +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+      zoominfo_api:
+        +query_tag: '{"tech_owner": "shared", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+
+seeds:
+  +pre-hook:
+  - "ALTER SESSION SET TIMEZONE = 'UTC'"
+  - "insert into _monitoring.dbt_audit (event_name, event_timestamp, event_schema, event_model) values ( 'starting model deployment', current_timestamp(), '{{this.schema}}', '{{this.name}}')"
+  +post-hook:
+  - "ALTER SESSION SET TIMEZONE = 'UTC'"
+  - "insert into _monitoring.dbt_audit (event_name, event_timestamp, event_schema, event_model) values ( 'completed model deployment', current_timestamp(), '{{this.schema}}', '{{this.name}}')"
+  snowflake_it:
+    +docs:
+      node_color: "#69793e"
+    arr_def_seeds:
+      +schema: arr_def_seeds
+      +tags: dw_cr
+      zuora_prpc_mapping_seed:
+        +column_types:
+          EFFECTIVE_TO_DATE: date
+    arr_dmf_seeds:
+      +schema: arr_dmf_seeds
+      +tags: dw_cr
+    data_modification_seeds:
+      +schema: data_modification_seeds
+    dbx_dataload:
+      +schema: dbx_dataload
+    dw_360_seeds:
+      +schema: dw_360_seeds
+    dw_account_funnel_seeds:
+      +schema: dw_account_funnel_seeds
+    dw_acv_seeds:
+      +schema: dw_acv_seeds
+    dw_adopt_intel_seeds:
+      +schema: dw_adopt_intel_seeds
+    dw_collaborators_seeds:
+      +schema: dw_collaborators_seeds
+    dw_corporate_strategy_seeds:
+      +schema: dw_corporate_strategy_seeds
+      +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "Business", "product_name": "Corp Data Reporting", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+    dw_cs_seeds:
+      +schema: dw_cs_seeds
+    dw_ds:
+      +schema: dw_ds
+    dw_dts_ops_seeds:
+      +schema: dw_dts_ops_seeds
+    dw_eng:
+      +schema: dw_eng
+    eng_seeds:
+      +schema: eng_seeds
+    dw_executive_seeds:
+      +schema: dw_executive_seeds
+      +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Exec", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+    dw_finance_seeds:
+      +schema: dw_finance_seeds
+    dw_golden_kpis_seeds:
+      +schema: dw_golden_kpis_seeds
+    dw_gtm_scout_seeds:
+      +schema: dw_gtm_scout_seeds
+      +query_tag: '{"tech_owner": "Sales Intelligence", "business_owner": "Sales", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+    dw_htr_sensitive_seeds:
+      +schema: dw_htr_sensitive_seeds
+      +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "HR", "domain_vertical": "Business", "product_name": "", "consumer_system": "Tableau", "pii": "true", "q_src": "dbt"}'
+    dw_itr_seeds:
+      +schema: dw_itr_seeds
+      +query_tag: '{"tech_owner": "Sales Intelligence", "business_owner": "Revenue", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+    dw_legal_seeds:
+      +schema: dw_legal_seeds
+    dw_life_cycle_seeds:
+      +schema: dw_life_cycle_seeds
+    dw_mto_seeds:
+      +schema: dw_mto_seeds
+      +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Revenue", "domain_vertical": "Business", "product_name": "", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+      account_segmentation_billings_country:
+        +column_types:
+          CONTINENTAL_REGION: varchar(765)
+      cv_assessment_mindtickle_passers:
+        +column_types:
+          employee_number: varchar(50)
+      sales_ae_am_attainment:
+        +column_types:
+          EMPLOYEE_ID: varchar(1000)
+          month: date
+      sales_leader_commissions:
+        +column_types:
+          month: date
+      sales_sdr_quotas_2023_seed_file:
+        +column_types:
+          employee_id: varchar(16777216)
+      sell_by_team_hierarchy:
+        +column_types:
+          effective_from_date: date
+          effective_to_date: date
+          created_date: date
+          updated_date: date
+      true_monthly_quotas_2022_seed_file:
+        +column_types:
+          employee_id: varchar(1000)
+      naics_code:
+        +column_types:
+          naics_code_full: varchar(100)
+          naics_code_2: varchar(100)
+          naics_code_4: varchar(100)
+          naics_code_6: varchar(100)
+      naics_sic_crosswalk:
+        +column_types:
+          naics_code: varchar(100)
+          related_sic_code: varchar(100)
+      sic_code:
+        +column_types:
+          sic_code: varchar(100)
+          sic_code_2: varchar(100)
+          sic_code_4: varchar(100)
+          sic_code_6: varchar(100)
+          sic_code_8: varchar(100)
+    dw_query_util_seeds:
+      +schema: dw_query_util_seeds
+    dw_pnt_eng:
+      +schema: dw_pnt_eng
+    dw_public_reporting_seeds:
+      +schema: dw_public_reporting_seeds
+      v_customer_base_errata:
+        +column_types:
+          END_OF_PERIOD_CEGID: varchar(16777216)
+    dw_qtc:
+      +schema: dw_qtc
+    dw_r_and_d:
+      +schema: dw_r_and_d
+      zip_cbsa_mapping:
+        +column_types:
+          ZIP: varchar(5)
+      procore_db_record_exclusions:
+        +column_types:
+          column_value: varchar
+          excluded_from_date: date
+          excluded_to_date: date
+    dw_shared:
+      +schema: dw_shared
+    dw_tech_services_seeds:
+      +schema: dw_tech_services_seeds
+    dw_third_party_seeds:
+      +schema: dw_third_party_seeds
+    mart_okr:
+      +schema: mart_okr
+    rum:
+      +schema: rum
+    icp_rts_enrichment_seeds:
+      +schema: icp_rts_enrichment_seeds
+    dw_compensation_seeds:
+      +schema: dw_compensation_seeds
+      +tags: dw_cr
+
+snapshots:
+  +pre-hook:
+  - "ALTER SESSION SET TIMEZONE = 'UTC'"
+  - "insert into _monitoring.dbt_audit (event_name, event_timestamp, event_schema, event_model) values ( 'starting model deployment', current_timestamp(), '{{this.schema}}', '{{this.name}}')"
+  +post-hook:
+  - "ALTER SESSION SET TIMEZONE = 'UTC'"
+  - "insert into _monitoring.dbt_audit (event_name, event_timestamp, event_schema, event_model) values ( 'completed model deployment', current_timestamp(), '{{this.schema}}', '{{this.name}}')"
+  +transient: false
+  snowflake_it:
+    +docs:
+      node_color: "#32cd7f"
+    salesforce_snapshots:
+      +schema: salesforce_snapshots
+      +query_tag: '{"tech_owner": "shared", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+    workday_raw_snapshots:
+      +schema: workday_raw_snapshots
+      +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "HR", "domain_vertical": "Business", "product_name": "", "consumer_system": "Tableau", "pii": "true", "q_src": "dbt"}'
+    zuora_snapshots:
+      +schema: zuora_snapshots
+      +query_tag: '{"tech_owner": "shared", "business_owner": "CRI/Finance", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+    ccd_snapshots:
+      +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "PnT Analytics", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+    dnb_snapshots:
+      +query_tag: '{"tech_owner": "Sales Intelligence", "business_owner": "Sales", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+    finance_snapshots:
+      +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "Business", "product_name": "Corp Data Reporting", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'
+    glenigan_api_snapshots:
+      +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "Tech", "product_name": "DTS", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+    r_and_d_snapshots:
+      +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+    rally_api_snapshots:
+      +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+    revpro_zuora_api_snapshots:
+      +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+    ucd_snapshots:
+      +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "PnT Analytics", "domain_vertical": "Tech", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+    zoominfo_api_snapshots:
+      +query_tag: '{"tech_owner": "shared", "business_owner": "Enterprise Data Engg, AI/ML", "domain_vertical": "", "product_name": "", "consumer_system": "", "pii": "false", "q_src": "dbt"}'
+    arr_snapshots:
+      +schema: arr_snapshots
+    compensation_snapshots:
+      +schema: compensation_snapshots
+      +query_tag: '{"tech_owner": "Enterprise Data", "business_owner": "CRI/Finance", "domain_vertical": "Business", "product_name": "Corp Data Reporting", "consumer_system": "Tableau", "pii": "false", "q_src": "dbt"}'

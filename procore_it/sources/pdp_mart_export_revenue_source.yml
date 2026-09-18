@@ -1,0 +1,10 @@
+version: 2
+
+sources:
+  - name: pdp_mart_export_revenue
+    database: procore_it
+    schema: mart_export_revenue
+    description: '{{ doc("pdp_mart_export_revenue_source") }}'
+    freshness: null
+    tables:
+      - name: opportunity_engagement_book_export
